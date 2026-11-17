@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Venkel IPN Batch Translator</title>
+    <meta
+      name="description"
+      content="Warehouse receiving batch utility for translating Samsung MLCC Manufacturer Part Numbers (MPNs) into Venkel Distributor Internal Part Numbers (IPNs) with strict 1:1 row alignment."
+    />
+    <meta property="og:title" content="Venkel IPN Batch Translator" />
+    <meta
+      property="og:description"
+      content="Warehouse receiving batch utility for translating Samsung MLCC Manufacturer Part Numbers (MPNs) into Venkel Distributor Internal Part Numbers (IPNs) with strict 1:1 row alignment."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+            },
+          },
+        },
+      };
+    </script>
+
+    <!-- React 18, ReactDOM 18, and Babel Standalone via CDN (Zero Build Step for GitHub Pages) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      body {
+        font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      code,
+      pre,
+      textarea.font-mono {
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased selection:bg-blue-600 selection:text-white">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useRef, useEffect, useMemo } = React;
+
+      // ============================================================================
+      // 1. SAMSUNG TO VENKEL TRANSLATION DICTIONARIES & ENGINE
+      // ============================================================================
+
+      const INVALID_MPN_MARKER = '[INVALID - CHECK MPN]';
+      const INVALID_TAPE_CODE_MARKER = '[INVALID TAPE CODE]';
+
+      const SIZE_DICTIONARY = {
+        '2': '01005',
+        '02': '01005',
+        '3': '0201',
+        '03': '0201',
+        '5': '0402',
+        '05': '0402',
+        '10': '0603',
+        '21': '0805',
+        '31': '1206',
+        '32': '1210',
+        '42': '1808',
+        '43': '1812',
+        '55': '2220',
+      };
+
+      const DISPLAY_SIZE_DICTIONARY = [
+        { samsung: '02 (2)', venkel: '01005', metric: '0402 Metric' },
+        { samsung: '03 (3)', venkel: '0201', metric: '0603 Metric' },
+        { samsung: '05 (5)', venkel: '0402', metric: '1005 Metric' },
+        { samsung: '10', venkel: '0603', metric: '1608 Metric' },
+        { samsung: '21', venkel: '0805', metric: '2012 Metric' },
+        { samsung: '31', venkel: '1206', metric: '3216 Metric' },
+        { samsung: '32', venkel: '1210', metric: '3225 Metric' },
+        { samsung: '42', venkel: '1808', metric: '4520 Metric' },
+        { samsung: '43', venkel: '1812', metric: '4532 Metric' },
+        { samsung: '55', venkel: '2220', metric: '5750 Metric' },
+      ];
+
+      const DIELECTRIC_DICTIONARY = {
+        C: 'C0G',
+        A: 'X5R',
+        B: 'X7R',
+        X: 'X6S',
+        F: 'Y5V',
+        Y: 'X7S',
+        Z: 'X7T',
+      };
+
+      const VOLTAGE_DICTIONARY = {
+        R: '4R0',
+        Q: '6R3',
+        P: '100',
+        O: '160',
+        A: '250',
+        L: '350',
+        B: '500',
+        C: '101',
+        D: '201',
+        E: '251',
+        G: '501',
+        H: '631',
+      };
+
+      const VOLTAGE_LABELS = {
+        R: '4V DC',
+        Q: '6.3V DC',
+        P: '10V DC',
+        O: '16V DC',
+        A: '25V DC',
+        L: '35V DC',
+        B: '50V DC',
+        C: '100V DC',
+        D: '200V DC',
+        E: '250V DC',
+        G: '500V DC',
+        H: '630V DC',
+      };
+
+      const SAMPLE_WAREHOUSE_BATCH = [
+        'CL10A106MQ',
+        'CL31A106KPHNNNE',
+        'CL31A106KAHNNNE',
+        'CL05B104KO5NNNC',
+        'CL21B105KBFNNNE',
+        '',
+        'CL03C101JB3NNNC',
+        'CL32A226KQJNNNE',
+        'CL99X106MQ',
+        'CL21A475KAQNNNE',
+        'CL02A104MQ2NNNC',
+        'SHORT12',
+        'CL43B104KCFNNNE',
+        'CL55B105KCHNNNE',
+      ].join('\n');
+
+      function translateSingleLine(rawLine, lineNumber = 1, options = {}) {
+        const { strictTapeValidation = false } = options;
+        const trimmed = rawLine.trim();
+
+        if (trimmed === '') {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: '',
+            output: '',
+            status: 'blank',
+          };
+        }
+
+        const normalized = trimmed.toUpperCase();
+
+        // Rule 1: Characters 1-2 (Type): CL -> Venkel prefix C
+        if (!normalized.startsWith('CL')) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Characters 1–2 must be "CL" (found "${normalized.slice(0, 2) || normalized}")`,
+          };
+        }
+
+        // Rule 2: Characters 3-4 (Size)
+        const twoCharSizeCandidate = normalized.slice(2, 4);
+        const oneCharSizeCandidate = normalized.slice(2, 3);
+
+        let sizeRaw = '';
+        let venkelSize = '';
+        let offsetAfterSize = 4;
+
+        if (twoCharSizeCandidate.length === 2 && SIZE_DICTIONARY[twoCharSizeCandidate]) {
+          sizeRaw = twoCharSizeCandidate;
+          venkelSize = SIZE_DICTIONARY[twoCharSizeCandidate];
+          offsetAfterSize = 4;
+        } else if (
+          (oneCharSizeCandidate === '2' ||
+            oneCharSizeCandidate === '3' ||
+            oneCharSizeCandidate === '5') &&
+          SIZE_DICTIONARY[oneCharSizeCandidate]
+        ) {
+          sizeRaw = oneCharSizeCandidate;
+          venkelSize = SIZE_DICTIONARY[oneCharSizeCandidate];
+          offsetAfterSize = 3;
+        } else {
+          if (normalized.length < 10) {
+            return {
+              lineNumber,
+              rawInput: rawLine,
+              trimmedInput: trimmed,
+              output: INVALID_MPN_MARKER,
+              status: 'invalid',
+              errorReason: `Part number too short (${normalized.length} chars; minimum 10 required)`,
+            };
+          }
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Unrecognized Samsung size code "${twoCharSizeCandidate}" at positions 3–4`,
+          };
+        }
+
+        const requiredMinLength = offsetAfterSize + 6;
+        if (normalized.length < requiredMinLength) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Part number too short (${normalized.length} chars; minimum ${requiredMinLength} required)`,
+          };
+        }
+
+        const dielectricRaw = normalized.slice(offsetAfterSize, offsetAfterSize + 1);
+        const valueRaw = normalized.slice(offsetAfterSize + 1, offsetAfterSize + 4);
+        const toleranceRaw = normalized.slice(offsetAfterSize + 4, offsetAfterSize + 5);
+        const voltageRaw = normalized.slice(offsetAfterSize + 5, offsetAfterSize + 6);
+        const ignoredSuffix = normalized.slice(offsetAfterSize + 6);
+
+        // Rule 3: Character 5 (Dielectric)
+        const venkelDielectric = DIELECTRIC_DICTIONARY[dielectricRaw];
+        if (!venkelDielectric) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Unrecognized dielectric code "${dielectricRaw}" at character 5`,
+          };
+        }
+
+        // Rule 4: Characters 6-8 (Value/Capacitance)
+        if (!/^[0-9R]{3}$/.test(valueRaw)) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Invalid capacitance value code "${valueRaw}" at characters 6–8`,
+          };
+        }
+
+        // Rule 5: Character 9 (Tolerance)
+        if (!/^[A-Z]$/.test(toleranceRaw)) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Invalid tolerance code "${toleranceRaw}" at character 9`,
+          };
+        }
+
+        // Rule 6: Character 10 (Voltage)
+        const venkelVoltage = VOLTAGE_DICTIONARY[voltageRaw];
+        if (!venkelVoltage) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_MPN_MARKER,
+            status: 'invalid',
+            errorReason: `Unrecognized voltage code "${voltageRaw}" at character 10`,
+          };
+        }
+
+        // Rule 7: Dynamic Taping/Packaging Suffix from final character of the Samsung MPN
+        const lastCharRaw = normalized.charAt(normalized.length - 1);
+        let venkelSuffix = 'NE';
+        let tapeRuleApplied = 'DEFAULT->NE';
+
+        if (lastCharRaw === 'E') {
+          venkelSuffix = 'NE';
+          tapeRuleApplied = 'E->NE';
+        } else if (lastCharRaw === 'C') {
+          venkelSuffix = 'NP';
+          tapeRuleApplied = 'C->NP';
+        } else if (strictTapeValidation) {
+          return {
+            lineNumber,
+            rawInput: rawLine,
+            trimmedInput: trimmed,
+            output: INVALID_TAPE_CODE_MARKER,
+            status: 'invalid',
+            errorReason: `Final character "${lastCharRaw}" is neither "E" (NE) nor "C" (NP) under strict tape validation`,
+          };
+        } else {
+          venkelSuffix = 'NE';
+          tapeRuleApplied = 'DEFAULT->NE';
+        }
+
+        const venkelPrefix = 'C';
+        // Final Assembly: [Prefix][Size][Dielectric][Voltage]-[Value][Tolerance][Suffix]
+        const output = `${venkelPrefix}${venkelSize}${venkelDielectric}${venkelVoltage}-${valueRaw}${toleranceRaw}${venkelSuffix}`;
+
+        return {
+          lineNumber,
+          rawInput: rawLine,
+          trimmedInput: trimmed,
+          output,
+          status: 'valid',
+          segments: {
+            prefixRaw: 'CL',
+            sizeRaw,
+            dielectricRaw,
+            valueRaw,
+            toleranceRaw,
+            voltageRaw,
+            ignoredSuffix,
+            lastCharRaw,
+            tapeRuleApplied,
+            venkelPrefix,
+            venkelSize,
+            venkelDielectric,
+            venkelVoltage,
+            venkelValue: valueRaw,
+            venkelTolerance: toleranceRaw,
+            venkelSuffix,
+          },
+        };
+      }
+
+      function translateBatch(inputText, options = {}) {
+        const normalizedText = inputText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const rawLines = normalizedText.split('\n');
+
+        let validCount = 0;
+        let invalidCount = 0;
+        let blankCount = 0;
+
+        const rows = rawLines.map((line, idx) => {
+          const result = translateSingleLine(line, idx + 1, options);
+          if (result.status === 'valid') validCount++;
+          else if (result.status === 'invalid') invalidCount++;
+          else blankCount++;
+          return result;
+        });
+
+        const outputText = rows.map((r) => r.output).join('\n');
+
+        return {
+          outputText,
+          rows,
+          totalLines: rows.length,
+          validCount,
+          invalidCount,
+          blankCount,
+        };
+      }
+
+      // ============================================================================
+      // 2. INLINE SVG ICONS (Zero External Icon Dependency)
+      // ============================================================================
+
+      const IconSun = () => (
+        <svg className="w-3.5 h-3.5 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+        </svg>
+      );
+
+      const IconMoon = () => (
+        <svg className="w-3.5 h-3.5 text-slate-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+        </svg>
+      );
+
+      const IconConvert = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16" />
+        </svg>
+      );
+
+      const IconCopy = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+        </svg>
+      );
+
+      const IconCheck = () => (
+        <svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      );
+
+      const IconSpreadsheet = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+          <path d="M14 2v4a2 2 0 0 0 2 2h4M8 13h2M14 13h2M8 17h2M14 17h2" />
+        </svg>
+      );
+
+      const IconLayers = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+          <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+          <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+        </svg>
+      );
+
+      const IconTrash = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+        </svg>
+      );
+
+      const IconDownload = () => (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+        </svg>
+      );
+
+      const IconSearch = () => (
+        <svg className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
+      );
+
+      // ============================================================================
+      // 3. UI COMPONENTS
+      // ============================================================================
+
+      function RowInspectorTable({ rows }) {
+        const [filterMode, setFilterMode] = useState('all');
+        const [searchQuery, setSearchQuery] = useState('');
+
+        const filteredRows = useMemo(() => {
+          return rows.filter((row) => {
+            if (filterMode !== 'all' && row.status !== filterMode) {
+              return false;
+            }
+            if (searchQuery.trim() !== '') {
+              const q = searchQuery.trim().toLowerCase();
+              const matchesLine = String(row.lineNumber).includes(q);
+              const matchesInput = row.rawInput.toLowerCase().includes(q);
+              const matchesOutput = row.output.toLowerCase().includes(q);
+              const matchesError = (row.errorReason || '').toLowerCase().includes(q);
+              return matchesLine || matchesInput || matchesOutput || matchesError;
+            }
+            return true;
+          });
+        }, [rows, filterMode, searchQuery]);
+
+        const counts = useMemo(() => {
+          let valid = 0;
+          let invalid = 0;
+          let blank = 0;
+          for (const r of rows) {
+            if (r.status === 'valid') valid++;
+            else if (r.status === 'invalid') invalid++;
+            else blank++;
+          }
+          return { all: rows.length, valid, invalid, blank };
+        }, [rows]);
+
+        return (
+          <section id="inspector" className="space-y-4 pt-6 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+                  Line-by-Line Receiving Verification Log
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
+                  Inspect individual spreadsheet row mappings, parsed capacitor parameters, and exact validation diagnostics for flagged MPNs.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setFilterMode('all')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      filterMode === 'all'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    All Rows ({counts.all})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterMode('valid')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      filterMode === 'valid'
+                        ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Valid ({counts.valid})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterMode('invalid')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      filterMode === 'invalid'
+                        ? 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-400 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Invalid ({counts.invalid})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterMode('blank')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      filterMode === 'blank'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    Blank ({counts.blank})
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <IconSearch />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Filter by MPN, IPN, or row #..."
+                    aria-label="Filter conversion log rows"
+                    className="pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+              <div className="max-h-96 overflow-y-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="sticky top-0 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 z-10">
+                    <tr>
+                      <th className="py-2.5 px-4 font-medium w-16 font-mono">Row #</th>
+                      <th className="py-2.5 px-4 font-medium">Samsung MPN (Input)</th>
+                      <th className="py-2.5 px-4 font-medium">Venkel IPN (Output)</th>
+                      <th className="py-2.5 px-4 font-medium">Status</th>
+                      <th className="py-2.5 px-4 font-medium">Parsed Token Breakdown / Diagnostic</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70 font-mono">
+                    {filteredRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-500 dark:text-slate-400 font-sans">
+                          No rows match the current filter criteria.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredRows.slice(0, 200).map((row) => (
+                        <tr
+                          key={row.lineNumber}
+                          className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${
+                            row.status === 'invalid' ? 'bg-rose-50/40 dark:bg-rose-950/20' : ''
+                          }`}
+                        >
+                          <td className="py-2.5 px-4 text-slate-400 dark:text-slate-500 tabular-nums">
+                            {row.lineNumber}
+                          </td>
+                          <td className="py-2.5 px-4 text-slate-900 dark:text-slate-100 font-medium">
+                            {row.status === 'blank' ? (
+                              <span className="text-slate-400 dark:text-slate-600 italic font-sans">Empty row</span>
+                            ) : (
+                              row.trimmedInput
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 font-semibold">
+                            {row.status === 'valid' && (
+                              <span className="text-blue-600 dark:text-blue-400">{row.output}</span>
+                            )}
+                            {row.status === 'invalid' && (
+                              <span className="text-rose-600 dark:text-rose-400">{row.output}</span>
+                            )}
+                            {row.status === 'blank' && (
+                              <span className="text-slate-400 dark:text-slate-600 italic font-sans">Blank line preserved</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 font-sans">
+                            {row.status === 'valid' && (
+                              <span className="text-emerald-700 dark:text-emerald-400 font-medium">Valid</span>
+                            )}
+                            {row.status === 'invalid' && (
+                              <span className="text-rose-700 dark:text-rose-400 font-medium">Check MPN</span>
+                            )}
+                            {row.status === 'blank' && (
+                              <span className="text-slate-500 dark:text-slate-400">Blank</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 font-sans text-slate-600 dark:text-slate-400">
+                            {row.status === 'valid' && row.segments && (
+                              <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono">
+                                <span>Size {row.segments.sizeRaw}→{row.segments.venkelSize}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>Diel {row.segments.dielectricRaw}→{row.segments.venkelDielectric}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>Volt {row.segments.voltageRaw}→{row.segments.venkelVoltage}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>Val {row.segments.valueRaw}{row.segments.toleranceRaw}</span>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-blue-600 dark:text-blue-400 font-semibold">
+                                  {row.segments.tapeRuleApplied === 'E->NE' && 'Tape E→NE'}
+                                  {row.segments.tapeRuleApplied === 'C->NP' && 'Tape C→NP'}
+                                  {row.segments.tapeRuleApplied === 'DEFAULT->NE' &&
+                                    `Tape (${row.segments.lastCharRaw})→NE`}
+                                </span>
+                              </div>
+                            )}
+                            {row.status === 'invalid' && (
+                              <span className="text-rose-700 dark:text-rose-400">{row.errorReason}</span>
+                            )}
+                            {row.status === 'blank' && (
+                              <span className="text-slate-400 dark:text-slate-500">1:1 vertical alignment spacer</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {filteredRows.length > 200 && (
+                <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                  Showing first 200 of {filteredRows.length} matching rows in the diagnostic table. All {rows.length} rows are present in the Output textarea above.
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      }
+
+      function DictionaryReference() {
+        return (
+          <section id="dictionaries" className="space-y-8 pt-6 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+                  Samsung to Venkel Translation Specification
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 max-w-2xl">
+                  Deterministic character-position mapping table used by the warehouse receiving engine. The final character of the Samsung MPN dynamically determines the Venkel packaging suffix (<code className="font-mono font-semibold text-slate-900 dark:text-slate-100">E → NE</code>, <code className="font-mono font-semibold text-slate-900 dark:text-slate-100">C → NP</code>, otherwise defaults to <code className="font-mono font-semibold text-slate-900 dark:text-slate-100">NE</code> or flags <code className="font-mono font-semibold text-rose-600 dark:text-rose-400">[INVALID TAPE CODE]</code> in strict mode).
+                </p>
+              </div>
+              <div className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                Format: <span className="text-slate-900 dark:text-slate-100 font-semibold">[Prefix][Size][Dielectric][Voltage]-[Value][Tolerance][Suffix]</span>
+              </div>
+            </div>
+
+            <div id="anatomy" className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 p-6">
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  1-Indexed Character Position Anatomy
+                </h3>
+                <div className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                  Examples: <span className="text-slate-900 dark:text-slate-200 font-semibold">CL05B104KO5NNNC</span> → <span className="text-blue-600 dark:text-blue-400 font-semibold">C0402X7R160-104KNP</span> · <span className="text-slate-900 dark:text-slate-200 font-semibold">CL31A106KPHNNNE</span> → <span className="text-blue-600 dark:text-blue-400 font-semibold">C1206X5R100-106KNE</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 font-mono">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Chars 1–2 · Type</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">CL → C</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">MLCC Prefix</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Chars 3–4 · Size</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">05 → 0402</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">EIA Package</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Char 5 · Dielectric</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">B → X7R</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">Temp Coeff</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Chars 6–8 · Value</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">104 → 104</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">Direct Copy (0.1µF)</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Char 9 · Tolerance</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">K → K</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">Direct Copy (±10%)</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Char 10 · Voltage</div>
+                  <div className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">O → 160</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">Placed Before Hyphen</div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800">
+                  <div className="text-xs text-slate-500 dark:text-slate-400">Final Char · Tape</div>
+                  <div className="text-base font-bold text-blue-600 dark:text-blue-400 mt-1">E→NE · C→NP</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-sans">Other → NE (Default)</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Characters 3–4: Size Dictionary
+                  </h3>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">10 Codes</span>
+                </div>
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/50">
+                      <th className="py-2.5 px-4 font-medium">Samsung</th>
+                      <th className="py-2.5 px-4 font-medium">Venkel EIA</th>
+                      <th className="py-2.5 px-4 font-medium text-right font-sans">Reference</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70">
+                    {DISPLAY_SIZE_DICTIONARY.map((row) => (
+                      <tr key={row.samsung} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="py-2 px-4 font-semibold text-slate-900 dark:text-slate-100">{row.samsung}</td>
+                        <td className="py-2 px-4 text-blue-600 dark:text-blue-400 font-semibold">{row.venkel}</td>
+                        <td className="py-2 px-4 text-right text-slate-500 dark:text-slate-400 font-sans">{row.metric}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Character 5: Dielectric Dictionary
+                  </h3>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">7 Codes</span>
+                </div>
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/50">
+                      <th className="py-2.5 px-4 font-medium">Samsung</th>
+                      <th className="py-2.5 px-4 font-medium text-right">Venkel Dielectric</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70">
+                    {Object.entries(DIELECTRIC_DICTIONARY).map(([sam, ven]) => (
+                      <tr key={sam} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="py-2 px-4 font-semibold text-slate-900 dark:text-slate-100">{sam}</td>
+                        <td className="py-2 px-4 text-right text-blue-600 dark:text-blue-400 font-semibold">{ven}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Character 10: Voltage Dictionary
+                  </h3>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">12 Codes</span>
+                </div>
+                <table className="w-full text-left border-collapse text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/50">
+                      <th className="py-2.5 px-4 font-medium">Samsung</th>
+                      <th className="py-2.5 px-4 font-medium">Venkel Code</th>
+                      <th className="py-2.5 px-4 font-medium text-right font-sans">Rated Voltage</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70">
+                    {Object.entries(VOLTAGE_DICTIONARY).map(([sam, ven]) => (
+                      <tr key={sam} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="py-2 px-4 font-semibold text-slate-900 dark:text-slate-100">{sam}</td>
+                        <td className="py-2 px-4 text-blue-600 dark:text-blue-400 font-semibold">{ven}</td>
+                        <td className="py-2 px-4 text-right text-slate-500 dark:text-slate-400 font-sans">
+                          {VOLTAGE_LABELS[sam]}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      // ============================================================================
+      // 4. ROOT APPLICATION
+      // ============================================================================
+
+      function App() {
+        const [inputText, setInputText] = useState(SAMPLE_WAREHOUSE_BATCH);
+        const [strictTapeValidation, setStrictTapeValidation] = useState(false);
+        const [batchResult, setBatchResult] = useState(() =>
+          translateBatch(SAMPLE_WAREHOUSE_BATCH, { strictTapeValidation: false })
+        );
+        const [isDark, setIsDark] = useState(false);
+        const [copiedOutput, setCopiedOutput] = useState(false);
+        const [autoConvert, setAutoConvert] = useState(true);
+        const [isDirty, setIsDirty] = useState(false);
+
+        const inputTextareaRef = useRef(null);
+        const outputTextareaRef = useRef(null);
+        const inputGutterRef = useRef(null);
+        const outputGutterRef = useRef(null);
+
+        useEffect(() => {
+          const root = document.documentElement;
+          if (isDark) {
+            root.classList.add('dark');
+          } else {
+            root.classList.remove('dark');
+          }
+        }, [isDark]);
+
+        const handleConvert = (sourceText = inputText, strictMode = strictTapeValidation) => {
+          const result = translateBatch(sourceText, { strictTapeValidation: strictMode });
+          setBatchResult(result);
+          setIsDirty(false);
+        };
+
+        const handleInputChange = (e) => {
+          const nextValue = e.target.value;
+          setInputText(nextValue);
+          if (autoConvert) {
+            setBatchResult(translateBatch(nextValue, { strictTapeValidation }));
+            setIsDirty(false);
+          } else {
+            setIsDirty(true);
+          }
+        };
+
+        const handleSyncScroll = (source) => {
+          const inputEl = inputTextareaRef.current;
+          const outputEl = outputTextareaRef.current;
+          if (!inputEl || !outputEl) return;
+
+          const scrollTop = source === 'input' ? inputEl.scrollTop : outputEl.scrollTop;
+          if (source === 'input') {
+            outputEl.scrollTop = scrollTop;
+          } else {
+            inputEl.scrollTop = scrollTop;
+          }
+
+          if (inputGutterRef.current) inputGutterRef.current.scrollTop = scrollTop;
+          if (outputGutterRef.current) outputGutterRef.current.scrollTop = scrollTop;
+        };
+
+        const handleCopyOutput = async () => {
+          const textToCopy = batchResult.outputText;
+          try {
+            await navigator.clipboard.writeText(textToCopy);
+            setCopiedOutput(true);
+            setTimeout(() => setCopiedOutput(false), 2000);
+          } catch {
+            if (outputTextareaRef.current) {
+              outputTextareaRef.current.select();
+              document.execCommand('copy');
+              setCopiedOutput(true);
+              setTimeout(() => setCopiedOutput(false), 2000);
+            }
+          }
+        };
+
+        const handleLoadSample = () => {
+          setInputText(SAMPLE_WAREHOUSE_BATCH);
+          handleConvert(SAMPLE_WAREHOUSE_BATCH, strictTapeValidation);
+        };
+
+        const handleLoad500Rows = () => {
+          const samplePool = [
+            'CL10A106MQ',
+            'CL31A106KPHNNNE',
+            'CL31A106KAHNNNE',
+            'CL05B104KO5NNNC',
+            'CL21B105KBFNNNE',
+            'CL03C101JB3NNNC',
+            'CL32A226KQJNNNE',
+            'CL21A475KAQNNNE',
+            'CL02A104MQ2NNNC',
+            'CL43B104KCFNNNE',
+            'CL55B105KCHNNNE',
+          ];
+          const generated = [];
+          for (let i = 0; i < 500; i++) {
+            if (i > 0 && i % 25 === 0) {
+              generated.push('');
+            } else if (i > 0 && i % 40 === 0) {
+              generated.push(`CL99X999XX_ROW_${i + 1}`);
+            } else {
+              generated.push(samplePool[i % samplePool.length]);
+            }
+          }
+          const text = generated.join('\n');
+          setInputText(text);
+          handleConvert(text, strictTapeValidation);
+        };
+
+        const handleClear = () => {
+          setInputText('');
+          handleConvert('', strictTapeValidation);
+        };
+
+        const handleDownloadCsv = () => {
+          const csvLines = ['"Row","Samsung_MPN","Venkel_IPN","Status"'];
+          for (const row of batchResult.rows) {
+            const escapedIn = row.trimmedInput.replace(/"/g, '""');
+            const escapedOut = row.output.replace(/"/g, '""');
+            csvLines.push(`${row.lineNumber},"${escapedIn}","${escapedOut}","${row.status}"`);
+          }
+          const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'venkel-ipn-batch-output.csv';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        };
+
+        const handleDownloadSelfHtml = () => {
+          const htmlSource = '<!doctype html>\n' + document.documentElement.outerHTML;
+          const blob = new Blob([htmlSource], { type: 'text/html;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'index.html';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        };
+
+        const inputLineCount = inputText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').length;
+        const outputLineCount = batchResult.rows.length;
+
+        return (
+          <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-150">
+            {/* Top Bar Contract: 3 zones separated by gap-8 */}
+            <header className="flex items-center justify-between gap-8 px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+              <a
+                href="#workspace"
+                className="text-lg font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap shrink-0"
+              >
+                Venkel IPN Translator
+              </a>
+
+              <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+                <a
+                  href="#workspace"
+                  className="hover:text-slate-900 dark:hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Batch Converter
+                </a>
+                <a
+                  href="#inspector"
+                  className="hover:text-slate-900 dark:hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Row Diagnostics
+                </a>
+                <a
+                  href="#anatomy"
+                  className="hover:text-slate-900 dark:hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Token Anatomy
+                </a>
+                <a
+                  href="#dictionaries"
+                  className="hover:text-slate-900 dark:hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+                >
+                  Mapping Tables
+                </a>
+              </nav>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDownloadSelfHtml}
+                  className="px-4 py-2 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg hover:bg-slate-800 dark:hover:bg-white transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-2"
+                >
+                  <IconDownload />
+                  <span>Download Single-File HTML</span>
+                </button>
+              </div>
+            </header>
+
+            <main id="workspace" className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-8 space-y-8">
+              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 border-b border-slate-200 dark:border-slate-800 pb-6">
+                <div className="space-y-1.5 max-w-xl">
+                  <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    <span>Warehouse Receiving Utility</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Samsung MLCC to Venkel IPN</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Dynamic E→NE / C→NP Suffix</span>
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    Samsung MLCC to Venkel IPN Batch Converter
+                  </h1>
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    Paste a column of Samsung part numbers directly from Excel or your receiving sheet. Blank rows remain blank and invalid MPNs output{' '}
+                    <code className="font-mono text-xs font-semibold text-rose-600 dark:text-rose-400">
+                      [INVALID - CHECK MPN]
+                    </code>{' '}
+                    to preserve exact row alignment.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsDark((prev) => !prev)}
+                    aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                    className="px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    {isDark ? (
+                      <>
+                        <IconSun />
+                        <span>Light Mode</span>
+                      </>
+                    ) : (
+                      <>
+                        <IconMoon />
+                        <span>Dark Mode</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLoadSample}
+                    className="px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    <IconSpreadsheet />
+                    <span>Sample Batch</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLoad500Rows}
+                    className="px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    <IconLayers />
+                    <span>500-Row Test</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    className="px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    <IconTrash />
+                    <span>Clear</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleConvert(inputText, strictTapeValidation)}
+                    className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 shadow-sm"
+                  >
+                    <IconConvert />
+                    <span>Convert</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyOutput}
+                    className="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-slate-800 dark:border dark:border-slate-700 text-white dark:text-slate-100 hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 shadow-sm"
+                  >
+                    {copiedOutput ? (
+                      <>
+                        <IconCheck />
+                        <span>Copied Output</span>
+                      </>
+                    ) : (
+                      <>
+                        <IconCopy />
+                        <span>Copy Output</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-4 text-xs font-mono">
+                <div className="flex flex-wrap items-center gap-3 text-slate-600 dark:text-slate-400">
+                  <span>
+                    Total Lines: <strong className="text-slate-900 dark:text-slate-100">{batchResult.totalLines}</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Valid IPNs: <strong className="text-emerald-700 dark:text-emerald-400">{batchResult.validCount}</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Flagged MPNs: <strong className="text-rose-600 dark:text-rose-400">{batchResult.invalidCount}</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Blank Rows: <strong className="text-slate-900 dark:text-slate-100">{batchResult.blankCount}</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    1:1 Row Alignment:{' '}
+                    <strong className="text-blue-600 dark:text-blue-400">
+                      {inputLineCount === outputLineCount
+                        ? `${inputLineCount} : ${outputLineCount} Verified`
+                        : 'Pending Convert'}
+                    </strong>
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-4 font-sans">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={strictTapeValidation}
+                      onChange={(e) => {
+                        const nextStrict = e.target.checked;
+                        setStrictTapeValidation(nextStrict);
+                        handleConvert(inputText, nextStrict);
+                      }}
+                      className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Strict Tape Code (E/C Only)</span>
+                  </label>
+
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={autoConvert}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setAutoConvert(checked);
+                        if (checked) {
+                          handleConvert(inputText, strictTapeValidation);
+                        }
+                      }}
+                      className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Live convert while typing/pasting</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadCsv}
+                    className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline underline-offset-4 whitespace-nowrap shrink-0"
+                  >
+                    Export Receiving CSV
+                  </button>
+                </div>
+              </div>
+
+              {/* Two-Column Bulk Input / Output Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+                <div className="flex flex-col border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-800/50">
+                    <label
+                      htmlFor="samsung-mpn-input"
+                      className="text-xs font-semibold text-slate-900 dark:text-slate-100"
+                    >
+                      Samsung MPN Batch Input
+                    </label>
+                    <div className="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
+                      <span>{inputLineCount} rows</span>
+                      <span aria-hidden="true">·</span>
+                      <span>Editable</span>
+                    </div>
+                  </div>
+
+                  <div className="relative flex flex-1 h-[368px]">
+                    <div
+                      ref={inputGutterRef}
+                      aria-hidden="true"
+                      className="w-12 py-4 px-2 select-none overflow-hidden bg-slate-50 dark:bg-slate-950/60 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs leading-6 text-slate-400 dark:text-slate-600 tabular-nums"
+                    >
+                      {Array.from({ length: inputLineCount }, (_, i) => (
+                        <div key={i + 1}>{i + 1}</div>
+                      ))}
+                    </div>
+
+                    <textarea
+                      id="samsung-mpn-input"
+                      ref={inputTextareaRef}
+                      value={inputText}
+                      onChange={handleInputChange}
+                      onScroll={() => handleSyncScroll('input')}
+                      spellCheck={false}
+                      placeholder={'Paste column of Samsung MLCC part numbers here (one per line)...\nCL10A106MQ\nCL31A106KAHNNNE'}
+                      className="flex-1 w-full p-4 font-mono text-sm leading-6 bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none resize-none overflow-y-auto whitespace-pre"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-800/50">
+                    <label
+                      htmlFor="venkel-ipn-output"
+                      className="text-xs font-semibold text-slate-900 dark:text-slate-100"
+                    >
+                      Venkel IPN Batch Output (Read-Only)
+                    </label>
+                    <div className="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
+                      <span>{outputLineCount} rows</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{isDirty ? 'Click Convert to refresh' : '1:1 Synced'}</span>
+                    </div>
+                  </div>
+
+                  <div className="relative flex flex-1 h-[368px]">
+                    <div
+                      ref={outputGutterRef}
+                      aria-hidden="true"
+                      className="w-12 py-4 px-2 select-none overflow-hidden bg-slate-50 dark:bg-slate-950/60 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs leading-6 text-slate-400 dark:text-slate-600 tabular-nums"
+                    >
+                      {batchResult.rows.map((row) => (
+                        <div
+                          key={row.lineNumber}
+                          className={
+                            row.status === 'invalid'
+                              ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                              : ''
+                          }
+                        >
+                          {row.lineNumber}
+                        </div>
+                      ))}
+                    </div>
+
+                    <textarea
+                      id="venkel-ipn-output"
+                      ref={outputTextareaRef}
+                      value={batchResult.outputText}
+                      readOnly
+                      onScroll={() => handleSyncScroll('output')}
+                      spellCheck={false}
+                      placeholder="Converted Venkel IPNs appear here with strict 1:1 line mapping..."
+                      className="flex-1 w-full p-4 font-mono text-sm leading-6 bg-slate-50/40 dark:bg-slate-950/30 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none resize-none overflow-y-auto whitespace-pre"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <RowInspectorTable rows={batchResult.rows} />
+              <DictionaryReference />
+            </main>
+
+            <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-4 mt-12">
+              <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+                <span>Venkel IPN Batch Translator · Single-File GitHub Pages Edition (React + Babel CDN)</span>
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={handleDownloadSelfHtml}
+                    className="hover:text-slate-900 dark:hover:text-white transition-colors"
+                  >
+                    Download Offline Single-File index.html
+                  </button>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={handleDownloadCsv}
+                    className="hover:text-slate-900 dark:hover:text-white transition-colors"
+                  >
+                    Download CSV Report
+                  </button>
+                </div>
+              </div>
+            </footer>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
