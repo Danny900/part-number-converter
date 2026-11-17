@@ -1,6 +1,0 @@
-{
-  "name": "Venkel IPN Batch Translator",
-  "description": "Warehouse receiving batch utility for translating Samsung MLCC Manufacturer Part Numbers (MPNs) into Venkel Distributor Internal Part Numbers (IPNs) with strict 1:1 row alignment.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
